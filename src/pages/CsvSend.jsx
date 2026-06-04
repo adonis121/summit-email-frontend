@@ -1,41 +1,50 @@
 import { useState, useRef, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import Papa from 'papaparse';
+import Handlebars from 'handlebars';
 import api from '../lib/api';
 import toast from 'react-hot-toast';
 
-// Mirrors the server-side renderer (src/lib/templateRenderer.js) for the in-browser preview.
-const ESCAPE_MAP = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#x27;' };
-function escapeHtml(str) {
-  return String(str ?? '').replace(/[&<>"']/g, ch => ESCAPE_MAP[ch]);
-}
-function paragraphToHtml(str) {
-  return escapeHtml(str).replace(/\r?\n/g, '<br>');
-}
+// SendGrid fills this tag at send time; stub it for the in-browser preview.
+const ASM_UNSUBSCRIBE_TAG = '<%asm_group_unsubscribe_raw_url%>';
+
+// Renders the email preview with the SAME Handlebars engine SendGrid uses for
+// dynamic templates, so {{#if nameN}} blocks and {{var}} escaping match the real send.
 function renderPreview(html, row) {
-  return html
-    .replace(/\{\{recipient_name\}\}/g, escapeHtml(row?.recipientName || ''))
-    .replace(/\{\{company_paragraph\}\}/g, paragraphToHtml(row?.paragraph || ''))
-    .replace(/\{\{unsubscribe_url\}\}/g, 'https://www.balkansummit.org/unsubscribe');
+  try {
+    const out = Handlebars.compile(html)(row || {});
+    return out.split(ASM_UNSUBSCRIBE_TAG).join('https://www.balkansummit.org/unsubscribe');
+  } catch (e) {
+    return `<pre style="color:#b00;padding:16px;font:13px monospace">Template error: ${e.message}</pre>`;
+  }
 }
 
+// Envelope columns + the 19 personalization columns the dynamic template expects,
+// keyed by their EXACT names. Slots 2–4 are optional and may be blank.
+const ENVELOPE_COLUMNS = ['recipient_email', 'cc', 'subject'];
+const TEMPLATE_FIELDS = [
+  'pronounce', 'recipient_name', 'company_paragraph',
+  'pronounce1', 'name1', 'title1', 'email1',
+  'pronounce2', 'name2', 'title2', 'email2',
+  'pronounce3', 'name3', 'title3', 'email3',
+  'pronounce4', 'name4', 'title4', 'email4',
+];
+const ALL_COLUMNS = [...ENVELOPE_COLUMNS, ...TEMPLATE_FIELDS];
 const REQUIRED_COLUMNS = ['recipient_email', 'subject'];
-const KNOWN_TOKENS = ['recipient_name', 'company_paragraph', 'unsubscribe_url'];
 
-// Downloadable sample so users have a correctly-formatted starting point.
-// Rows show: single to+cc, single to with multiple cc, multiple to, and multiple to+cc.
-// Multiple addresses in either column are separated with a semicolon ';'.
-const SAMPLE_CSV = `recipient_email,recipient_name,cc,subject,company_paragraph
-jane.doe@acme.com,Ms. Jane Doe,assistant@acme.com,Invitation to Balkan Summit 2026,"Acme's leadership in grid-scale renewables maps directly onto the energy-infrastructure portfolios being presented in Pristina."
-m.rossi@buildgroup.eu,Mr. Rossi,"assistant@buildgroup.eu;cfo@buildgroup.eu;legal@buildgroup.eu",Balkan Summit 2026 — Partnership Opportunity,"With BuildGroup's two decades delivering EPC and concession projects across Southeast Europe, the Summit offers early access to the pipeline taking shape across the region."
-"director@nordicinfra.no;cfo@nordicinfra.no","Director Hansen and the Nordic Infra team",team@nordicinfra.no,Balkan Summit 2026 — Invitation for Nordic Infra,"Nordic Infra's track record on donor-funded transport projects positions your team for the PPP and concession opportunities at the heart of this Summit."
-"ceo@adriabuild.hr;coo@adriabuild.hr",AdriaBuild leadership,"board@adriabuild.hr;assistant@adriabuild.hr",Balkan Summit 2026 — Partnership Invitation,"AdriaBuild's regional construction portfolio aligns closely with the public-infrastructure projects and PPP opportunities at the centre of the Summit."
+// Downloadable sample matching the 22-column schema. Row 1 has all 4 contact slots
+// (multi-To + multi-Cc); row 2 fills only slots 1–2 (others blank → hidden by {{#if}}).
+const SAMPLE_CSV = `recipient_email,cc,subject,pronounce,recipient_name,company_paragraph,pronounce1,name1,title1,email1,pronounce2,name2,title2,email2,pronounce3,name3,title3,email3,pronounce4,name4,title4,email4
+jane.doe@acme.com,"assistant@acme.com;cfo@acme.com",Invitation to Balkan Summit 2026,Ms.,Jane Doe,"Acme's leadership in grid-scale renewables maps directly onto the energy-infrastructure portfolios being presented in Pristina.",H.E.,Sample Ambassador,Ambassador to Kosovo,amb@example.org,H.E.,Second Envoy,Kosovo's Ambassador,envoy@rks-gov.net,Mr.,Deputy Name,Deputy Ambassador,deputy@example.org,Ms.,Trade Officer,Economy & Trade Officer,trade@example.org
+m.rossi@buildgroup.eu,assistant@buildgroup.eu,Balkan Summit 2026 — Partnership Opportunity,Mr.,Marco Rossi,"With BuildGroup's two decades delivering EPC and concession projects across Southeast Europe, the Summit offers early access to the regional pipeline.",H.E.,Sample Ambassador,Ambassador to Kosovo,amb@example.org,H.E.,Second Envoy,Kosovo's Ambassador,envoy@rks-gov.net,,,,,,,,
 `;
 
 // Placeholder used to render the email preview before a CSV is loaded.
 const SAMPLE_PREVIEW_ROW = {
-  recipientName: 'Mr. Sample Recipient',
-  paragraph: 'This is where each recipient’s personalized paragraph from the CSV will appear.',
+  pronounce: 'Mr.',
+  recipient_name: 'Sample Recipient',
+  company_paragraph: 'This is where each recipient’s personalized paragraph from the CSV will appear.',
+  pronounce1: 'H.E.', name1: 'Sample Ambassador', title1: 'Ambassador to Kosovo', email1: 'ambassador@example.org',
 };
 
 function downloadSampleCsv() {
@@ -90,23 +99,23 @@ export default function CsvSend() {
         const fields = (res.meta.fields || []).map(f => f.trim().toLowerCase());
         const missing = REQUIRED_COLUMNS.filter(c => !fields.includes(c));
         if (missing.length) {
-          setCsvError(`CSV is missing required column(s): ${missing.join(', ')}. Expected headers: recipient_email, recipient_name, cc, subject, company_paragraph.`);
+          setCsvError(`CSV is missing required column(s): ${missing.join(', ')}. Expected the 22-column schema (recipient_email, cc, subject, pronounce, recipient_name, company_paragraph, pronounce1…email4).`);
           setRows([]);
           return;
         }
         const get = (r, k) => {
           const key = Object.keys(r).find(kk => kk.trim().toLowerCase() === k);
-          return key ? r[key] : '';
+          return key ? String(r[key] ?? '').trim() : '';
         };
+        // Each row is keyed by the exact column names; the backend forwards the
+        // personalization fields verbatim as dynamic_template_data.
         const mapped = res.data
-          .map(r => ({
-            to: String(get(r, 'recipient_email') || '').trim(),
-            recipientName: String(get(r, 'recipient_name') || '').trim(),
-            cc: String(get(r, 'cc') || '').trim(),
-            subject: String(get(r, 'subject') || '').trim(),
-            paragraph: String(get(r, 'company_paragraph') || ''),
-          }))
-          .filter(r => r.to);
+          .map(r => {
+            const row = {};
+            for (const c of ALL_COLUMNS) row[c] = get(r, c);
+            return row;
+          })
+          .filter(r => r.recipient_email);
         if (mapped.length === 0) setCsvError('No rows with a recipient_email were found.');
         setRows(mapped);
       },
@@ -114,12 +123,9 @@ export default function CsvSend() {
     });
   }
 
-  // Tokens in the template that the CSV can't fill (surfaced before submit, matching server validation).
-  const unknownTokens = [...new Set(
-    (templateHtml.match(/\{\{\s*([a-zA-Z_]+)\s*\}\}/g) || []).map(t => t.replace(/[{}\s]/g, ''))
-  )].filter(t => !KNOWN_TOKENS.includes(t));
-
-  const canCreate = name.trim() && templateHtml && rows.length > 0 && unknownTokens.length === 0;
+  // The template renders inside SendGrid (dynamic template), so the browser doesn't
+  // validate its tokens — it only checks the template parses (caught in renderPreview).
+  const canCreate = name.trim() && templateHtml && rows.length > 0;
 
   // ---- actions ----
   async function handleCreate(e) {
@@ -220,13 +226,6 @@ export default function CsvSend() {
               onChange={handleHtmlFile}
               status={templateHtml ? `${templateHtml.length.toLocaleString()} chars loaded` : null}
             />
-            {unknownTokens.length > 0 && (
-              <p className="text-xs text-red-600">
-                Template has tokens the CSV can't fill: {unknownTokens.map(t => `{{${t}}}`).join(', ')}.
-                Supported: {KNOWN_TOKENS.map(t => `{{${t}}}`).join(', ')}.
-              </p>
-            )}
-
             <FileRow
               label="Recipients CSV *"
               accept=".csv,text/csv"
@@ -257,10 +256,10 @@ export default function CsvSend() {
                 <tbody>
                   {rows.slice(0, 5).map((r, i) => (
                     <tr key={i} className="border-b border-gray-50 last:border-0">
-                      <td className="px-4 py-2 text-gray-700">{r.to}</td>
+                      <td className="px-4 py-2 text-gray-700">{r.recipient_email}</td>
                       <td className="px-4 py-2 text-gray-400">{r.cc || '—'}</td>
                       <td className="px-4 py-2 text-gray-700 truncate max-w-[16rem]">{r.subject || <span className="text-red-500">missing</span>}</td>
-                      <td className="px-4 py-2 text-gray-400">{r.recipientName || '—'}</td>
+                      <td className="px-4 py-2 text-gray-400">{r.recipient_name || '—'}</td>
                     </tr>
                   ))}
                 </tbody>
