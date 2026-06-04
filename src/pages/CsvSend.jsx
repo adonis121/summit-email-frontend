@@ -63,6 +63,7 @@ export default function CsvSend() {
   const [name, setName] = useState('');
   const [senderName, setSenderName] = useState('Balkan Summit 2026');
   const [asmGroupId, setAsmGroupId] = useState('123553');
+  const [sendgridTemplateId, setSendgridTemplateId] = useState('');
   const [templateHtml, setTemplateHtml] = useState('');
   const [htmlFileName, setHtmlFileName] = useState('');
   const [rows, setRows] = useState([]);
@@ -137,6 +138,7 @@ export default function CsvSend() {
         name: name.trim(),
         senderName: senderName.trim(),
         asmGroupId: asmGroupId.trim(),
+        sendgridTemplateId: sendgridTemplateId.trim(),
         templateHtml,
         rows,
       });
@@ -198,7 +200,7 @@ export default function CsvSend() {
     stopPolling();
     setCampaign(null); setProgress(null); setSending(false);
     setRows([]); setCsvFileName(''); setCsvError('');
-    setTemplateHtml(''); setHtmlFileName(''); setName('');
+    setTemplateHtml(''); setHtmlFileName(''); setName(''); setSendgridTemplateId('');
   }
 
   return (
@@ -215,6 +217,7 @@ export default function CsvSend() {
               <Field label="Campaign name *" value={name} onChange={setName} placeholder="Balkan Summit — partner outreach" />
               <Field label="Sender name" value={senderName} onChange={setSenderName} placeholder="Balkan Summit 2026" hint="Shown as the From display name." />
               <Field label="ASM unsubscribe group ID" value={asmGroupId} onChange={setAsmGroupId} placeholder="123553" hint="Enables one-click List-Unsubscribe." />
+              <Field label="SendGrid template ID" value={sendgridTemplateId} onChange={setSendgridTemplateId} placeholder="d-… (optional)" hint="This campaign's dynamic template. Leave blank to use the server default." />
             </div>
           </div>
 
@@ -293,7 +296,7 @@ export default function CsvSend() {
               <div>
                 <p className="text-sm font-semibold text-gray-900">{name || `Campaign #${campaign.id}`}</p>
                 <p className="text-sm text-gray-500 mt-0.5">
-                  {campaign.total.toLocaleString()} recipient(s) · sender “{senderName || '—'}” · ASM group {asmGroupId || 'none'}
+                  {campaign.total.toLocaleString()} recipient(s) · sender “{senderName || '—'}” · ASM group {asmGroupId || 'none'} · template {sendgridTemplateId || 'default'}
                 </p>
                 {campaign.skipped > 0 && (
                   <p className="text-xs text-yellow-600 mt-1">{campaign.skipped} row(s) skipped (missing recipient or subject).</p>
